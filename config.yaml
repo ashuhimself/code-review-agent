@@ -1,0 +1,9 @@
+severity_thresholds:
+  fail_on: [CRITICAL, HIGH]
+  warn_on: [MEDIUM]
+ignored_paths:
+  - "tests/"
+  - "*.md"
+timeout_seconds: 300
+max_tokens: 16000
+base_branch: main
