@@ -2,14 +2,26 @@
 BitbucketClient: Posts review reports as comments on Bitbucket pull requests.
 """
 
+import logging
 import os
-from typing import Optional
+from typing import Protocol
 
 try:
     import requests
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+class PRClientProtocol(Protocol):
+    def post_pr_comment(self, pr_id: int, body: str) -> bool:
+        ...
+
+    def is_configured(self) -> bool:
+        ...
 
 
 class BitbucketClient:
@@ -26,9 +38,9 @@ class BitbucketClient:
 
     def __init__(
         self,
-        workspace: Optional[str] = None,
-        repo_slug: Optional[str] = None,
-        token: Optional[str] = None,
+        workspace: str | None = None,
+        repo_slug: str | None = None,
+        token: str | None = None,
     ):
         self.workspace = workspace or os.environ.get("BITBUCKET_WORKSPACE", "")
         self.repo_slug = repo_slug or os.environ.get("BITBUCKET_REPO", "")
@@ -48,14 +60,13 @@ class BitbucketClient:
         Returns True on success, False on failure (never raises).
         """
         if not self.is_configured():
-            print(
-                "  [Bitbucket] Skipping — BITBUCKET_TOKEN / BITBUCKET_WORKSPACE / "
-                "BITBUCKET_REPO not set."
+            LOGGER.info(
+                "[Bitbucket] Skipping - BITBUCKET_TOKEN / BITBUCKET_WORKSPACE / BITBUCKET_REPO not set."
             )
             return False
 
         if not HAS_REQUESTS:
-            print("  [Bitbucket] Skipping — 'requests' package not installed.")
+            LOGGER.info("[Bitbucket] Skipping - 'requests' package not installed.")
             return False
 
         url = (
@@ -71,19 +82,20 @@ class BitbucketClient:
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             if response.status_code in (200, 201):
-                print(f"  [Bitbucket] Comment posted to PR #{pr_id}.")
+                LOGGER.info("[Bitbucket] Comment posted to PR #%s.", pr_id)
                 return True
             else:
-                print(
-                    f"  [Bitbucket] Failed to post comment: "
-                    f"HTTP {response.status_code} — {response.text[:200]}"
+                LOGGER.warning(
+                    "[Bitbucket] Failed to post comment: HTTP %s - %s",
+                    response.status_code,
+                    response.text[:200],
                 )
                 return False
         except requests.RequestException as exc:
-            print(f"  [Bitbucket] Request error: {exc}")
+            LOGGER.warning("[Bitbucket] Request error: %s", exc)
             return False
 
-    def get_pr_diff(self, pr_id: int) -> Optional[str]:
+    def get_pr_diff(self, pr_id: int) -> str | None:
         """
         Fetch the unified diff for a PR (optional helper).
 

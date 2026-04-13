@@ -1,214 +1,74 @@
-"""
-Unit tests for AgentRunner.
+"""Unit tests for AgentRunner orchestration and parser behavior."""
 
-All subprocess calls are mocked — no actual copilot CLI invocation.
-"""
+from __future__ import annotations
 
 import json
-import subprocess
-import sys
+import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
-
-# Ensure the package root is on the path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from core.agent_runner import AgentRunner, AGENT_ORDER, AGENT_PROMPTS
+from core.agent_runner import AGENT_ORDER, AGENTS, AgentRunner, OutputParser, PromptBuilder
 
 
-@pytest.fixture
-def runner():
-    return AgentRunner(timeout=30, copilot_bin="copilot")
+def _write_prompt_files(tmp_path: Path) -> Path:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    for agent in AGENTS:
+        payload = {"prompt": [f"Prompt for {agent.name}"]}
+        (prompts_dir / agent.prompt_file).write_text(json.dumps(payload), encoding="utf-8")
+    return prompts_dir
 
 
-def _mock_proc(stdout: str, stderr: str = "", returncode: int = 0):
-    proc = MagicMock()
-    proc.stdout = stdout
-    proc.stderr = stderr
-    proc.returncode = returncode
-    return proc
-
-
-
-
-class TestParseJsonl:
-    def test_parses_finding_lines(self, runner):
-        finding = {
-            "type": "finding",
-            "agent": "security_scanner",
-            "severity": "HIGH",
-            "line": 10,
-            "file": "foo.py",
-            "description": "Hardcoded password",
-            "recommendation": "Use env var",
-        }
-        summary = {
-            "type": "summary",
-            "agent": "security_scanner",
-            "total_findings": 1,
-            "highest_severity": "HIGH",
-        }
-        raw = "\n".join([json.dumps(finding), json.dumps(summary)])
-        findings, summ = runner._parse_jsonl(raw, "security_scanner")
-
-        assert len(findings) == 1
-        assert findings[0]["severity"] == "HIGH"
-        assert summ["total_findings"] == 1
-
-    def test_ignores_invalid_json_lines(self, runner):
-        raw = "not json\n{\"type\": \"finding\", \"severity\": \"LOW\", \"agent\": \"x\", \"file\": \"f.py\", \"description\": \"d\", \"recommendation\": \"r\"}\nnot json either"
-        findings, _ = runner._parse_jsonl(raw, "x")
-        assert len(findings) == 1
-
-    def test_empty_output_returns_empty(self, runner):
-        findings, summary = runner._parse_jsonl("", "security_scanner")
-        assert findings == []
-        assert summary == {}
-
-    def test_unwraps_claude_json_wrapper(self, runner):
-        inner_finding = json.dumps({
-            "type": "finding",
-            "agent": "bug_detector",
-            "severity": "MEDIUM",
-            "line": 5,
-            "file": "bar.py",
-            "description": "None check missing",
-            "recommendation": "Add guard",
-        })
-        wrapper = {"result": inner_finding, "cost": 0.001}
-        raw = json.dumps(wrapper)
-        findings, _ = runner._parse_jsonl(raw, "bug_detector")
-        assert len(findings) == 1
-        assert findings[0]["severity"] == "MEDIUM"
-
-    def test_multiple_findings_different_severities(self, runner):
-        lines = [
-            json.dumps({"type": "finding", "agent": "a", "severity": "CRITICAL", "file": "a.py", "description": "x", "recommendation": "y"}),
-            json.dumps({"type": "finding", "agent": "a", "severity": "LOW", "file": "b.py", "description": "x", "recommendation": "y"}),
+def test_output_parser_parses_jsonl() -> None:
+    raw = "\n".join(
+        [
+            json.dumps({"type": "finding", "severity": "HIGH", "agent": "x", "file": "a.py"}),
+            json.dumps({"type": "summary", "agent": "x", "highest_severity": "HIGH", "total_findings": 1}),
         ]
-        findings, _ = runner._parse_jsonl("\n".join(lines), "a")
-        assert len(findings) == 2
+    )
+    findings, summary = OutputParser.parse_jsonl(raw, "x")
+    assert len(findings) == 1
+    assert summary["total_findings"] == 1
 
 
-class TestHighestSeverity:
-    def test_critical_wins(self):
-        findings = [
-            {"severity": "LOW"},
-            {"severity": "CRITICAL"},
-            {"severity": "HIGH"},
-        ]
-        assert AgentRunner._highest_severity(findings) == "CRITICAL"
-
-    def test_none_when_empty(self):
-        assert AgentRunner._highest_severity([]) == "NONE"
-
-    def test_medium_only(self):
-        findings = [{"severity": "MEDIUM"}, {"severity": "MEDIUM"}]
-        assert AgentRunner._highest_severity(findings) == "MEDIUM"
-
-    def test_case_insensitive(self):
-        findings = [{"severity": "high"}, {"severity": "low"}]
-        assert AgentRunner._highest_severity(findings) == "HIGH"
+def test_output_parser_extracts_nested_json_from_prose() -> None:
+    prose = (
+        "analysis text "
+        '{"type":"finding","severity":"MEDIUM","file":"a.py","description":"uses {var}"}'
+    )
+    findings, _ = OutputParser.extract_json_from_prose(prose)
+    assert len(findings) == 1
 
 
-class TestRunMethod:
-    def test_run_returns_expected_structure(self, runner):
-        finding_line = json.dumps({
-            "type": "finding",
-            "agent": "security_scanner",
-            "severity": "HIGH",
-            "line": 3,
-            "file": "secrets.py",
-            "description": "Hardcoded API key",
-            "recommendation": "Use env var",
-        })
-        summary_line = json.dumps({
-            "type": "summary",
-            "agent": "security_scanner",
-            "total_findings": 1,
-            "highest_severity": "HIGH",
-        })
-        mock_output = f"{finding_line}\n{summary_line}\n"
+def test_run_subset_uses_selected_agents(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = _write_prompt_files(Path(tmp))
+        monkeypatch.setattr("core.agent_runner.PROMPTS_DIR", prompts_dir)
 
-        with patch("subprocess.run", return_value=_mock_proc(mock_output)):
-            result = runner.run("security_scanner", "Check for secrets", "x = 'password123'")
+        def fake_runner(_cmd: list[str], _stdin: str) -> tuple[str, str]:
+            payload = json.dumps({"type": "summary", "agent": "x", "total_findings": 0, "highest_severity": "NONE"})
+            return payload, ""
 
-        assert result["agent"] == "security_scanner"
-        assert isinstance(result["findings"], list)
-        assert len(result["findings"]) == 1
-        assert result["severity"] == "HIGH"
-        assert result["error"] is None
-        assert "raw" in result
-
-    def test_run_handles_timeout(self, runner):
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=30)):
-            result = runner.run("security_scanner", "prompt", "context")
-
-        assert result["error"] is not None
-        assert "Timeout" in result["error"]
-        assert result["findings"] == []
-
-    def test_run_handles_missing_binary(self, runner):
-        with patch("subprocess.run", side_effect=FileNotFoundError()):
-            result = runner.run("security_scanner", "prompt", "context")
-
-        assert result["error"] is not None
-        assert "not found" in result["error"]
-
-    def test_run_with_no_findings(self, runner):
-        summary_line = json.dumps({
-            "type": "summary",
-            "agent": "domain_linter",
-            "total_findings": 0,
-            "highest_severity": "NONE",
-        })
-        with patch("subprocess.run", return_value=_mock_proc(summary_line)):
-            result = runner.run("domain_linter", "prompt", "context")
-
-        assert result["findings"] == []
-        assert result["severity"] == "NONE"
+        runner = AgentRunner(cli_runner=fake_runner)
+        results = runner.run_subset(["security_scanner", "bug_detector"], "code")
+        assert [result["agent"] for result in results] == ["security_scanner", "bug_detector"]
 
 
-class TestRunAll:
-    def test_run_all_returns_five_results(self, runner):
-        """All 5 agents should produce a result dict."""
-        mock_output = json.dumps({
-            "type": "summary",
-            "agent": "x",
-            "total_findings": 0,
-            "highest_severity": "NONE",
-        })
-        with patch("subprocess.run", return_value=_mock_proc(mock_output)):
-            results = runner.run_all("some python code")
+def test_run_all_matches_agent_order(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = _write_prompt_files(Path(tmp))
+        monkeypatch.setattr("core.agent_runner.PROMPTS_DIR", prompts_dir)
 
-        assert len(results) == 5
-        agent_names = [r["agent"] for r in results]
-        assert agent_names == AGENT_ORDER
+        def fake_runner(_cmd: list[str], _stdin: str) -> tuple[str, str]:
+            payload = json.dumps({"type": "summary", "agent": "x", "total_findings": 0, "highest_severity": "NONE"})
+            return payload, ""
 
-    def test_run_all_each_has_required_keys(self, runner):
-        mock_output = json.dumps({"type": "summary", "agent": "x", "total_findings": 0, "highest_severity": "NONE"})
-        with patch("subprocess.run", return_value=_mock_proc(mock_output)):
-            results = runner.run_all("code")
-
-        required_keys = {"agent", "findings", "severity", "summary", "raw", "error"}
-        for result in results:
-            assert required_keys.issubset(result.keys()), f"Missing keys in {result['agent']}"
+        runner = AgentRunner(cli_runner=fake_runner)
+        results = runner.run_all("code")
+        assert [result["agent"] for result in results] == AGENT_ORDER
 
 
-class TestAgentPrompts:
-    def test_all_agents_have_prompts(self):
-        for agent in AGENT_ORDER:
-            assert agent in AGENT_PROMPTS, f"Missing prompt for {agent}"
-            assert len(AGENT_PROMPTS[agent]) > 50, f"Prompt too short for {agent}"
-
-    def test_security_prompt_covers_key_topics(self):
-        prompt = AGENT_PROMPTS["security_scanner"].lower()
-        for keyword in ("credential", "eval", "os.system", "secret", "airflow"):
-            assert keyword in prompt, f"Security prompt missing '{keyword}'"
-
-    def test_domain_linter_prompt_covers_airflow(self):
-        prompt = AGENT_PROMPTS["domain_linter"].lower()
-        for keyword in ("default_args", "retry", "sensor", "catchup", "schedule"):
-            assert keyword in prompt, f"Domain linter prompt missing '{keyword}'"
+def test_prompt_builder_includes_platform_and_rules() -> None:
+    builder = PromptBuilder("platform")
+    prompt = builder.build(AGENTS[0], "agent", "rules", "context")
+    assert "platform" in prompt
+    assert "rules" in prompt

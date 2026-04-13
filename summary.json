@@ -1,231 +1,47 @@
 {
-  "generated_at": "2026-03-22T19:34:55.278848",
-  "scope": "domain_rules.py (smoke test)",
-  "overall_verdict": "REQUEST_CHANGES",
+  "generated_at": "2026-04-13T12:06:18.602458",
+  "scope": "run_review.py",
+  "overall_verdict": "APPROVE",
   "agents": {
     "security_scanner": {
       "display_name": "Security & Secrets Scanner",
-      "total_findings": 3,
-      "highest_severity": "MEDIUM",
-      "verdict": "APPROVE",
-      "findings": [
-        {
-          "type": "finding",
-          "agent": "security_scanner",
-          "severity": "MEDIUM",
-          "line": 83,
-          "file": "domain_rules.py",
-          "description": "build_rules_context() directly interpolates Rule field values (description, pattern, fix_hint) into strings that the docstring explicitly describes as content to be 'injected into agent prompts', with no sanitization or escaping applied.",
-          "recommendation": "If rules are ever sourced from external input (config file, DB, API) rather than hardcoded constants, this becomes a prompt-injection vector. Add sanitization (e.g., strip/escape control characters and prompt-delimiter tokens) before interpolating rule fields into LLM prompt strings."
-        },
-        {
-          "type": "finding",
-          "agent": "security_scanner",
-          "severity": "LOW",
-          "line": 14,
-          "file": "domain_rules.py",
-          "description": "The Rule dataclass declares severity: str with no validation against the allowed set {CRITICAL, HIGH, MEDIUM, LOW}. An invalid severity value would be silently stored and could corrupt severity-based filtering logic downstream.",
-          "recommendation": "Use an Enum or add a __post_init__ validator: if self.severity not in {'CRITICAL','HIGH','MEDIUM','LOW'}: raise ValueError(f'Invalid severity: {self.severity}')"
-        },
-        {
-          "type": "finding",
-          "agent": "security_scanner",
-          "severity": "LOW",
-          "line": 89,
-          "file": "domain_rules.py",
-          "description": "PY-001: Attribute accesses rule.severity, rule.id, rule.description, rule.pattern, rule.fix_hint in build_rules_context() and get_forbidden_patterns() lack explicit None guards. If a Rule is constructed via deserialization or reflection with None for any required field, this will raise an unhandled AttributeError.",
-          "recommendation": "Add a __post_init__ guard in Rule to assert no required fields are None, or add None checks before accessing fields in the iteration loops."
-        }
-      ],
-      "error": null
-    },
-    "bug_detector": {
-      "display_name": "Bug & Logic Detector",
-      "total_findings": 2,
-      "highest_severity": "MEDIUM",
-      "verdict": "APPROVE",
-      "findings": [
-        {
-          "type": "finding",
-          "agent": "bug_detector",
-          "severity": "MEDIUM",
-          "line": 6,
-          "file": "domain_rules.py",
-          "description": "PY-001 / type-safety: `field` is imported from `dataclasses` but never used anywhere in the module. Additionally, `Optional` is not imported from `typing`, yet is required for the function signature on `build_rules_context`.",
-          "recommendation": "Remove `field` from the dataclasses import. Add `Optional` to the `typing` import: `from typing import List, Dict, Optional`."
-        },
-        {
-          "type": "finding",
-          "agent": "bug_detector",
-          "severity": "MEDIUM",
-          "line": null,
-          "file": "domain_rules.py",
-          "description": "PY-001 / type-annotation mismatch: `build_rules_context(categories: List[str] = None)` declares `categories` as `List[str]` but the default value is `None`, which is not a valid `List[str]`. Any type-checker (mypy, pyright) will flag every call-site that omits the argument as passing `None` into a `List[str]` parameter, potentially masking downstream `None`-dereference bugs if the guard is ever removed.",
-          "recommendation": "Change the signature to `def build_rules_context(categories: Optional[List[str]] = None) -> str:` and ensure `Optional` is imported from `typing`."
-        }
-      ],
-      "error": null
-    },
-    "test_coverage": {
-      "display_name": "Test Coverage + TDD Suggester",
-      "total_findings": 9,
-      "highest_severity": "HIGH",
-      "verdict": "NEEDS_DISCUSSION",
-      "findings": [
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "HIGH",
-          "line": null,
-          "file": "domain_rules.py",
-          "description": "build_rules_context() has no tests at all. Both its default-categories path (categories=None) and its explicit-categories path are completely uncovered.",
-          "code_snippet": "import pytest\nfrom domain_rules import build_rules_context\n\ndef test_build_rules_context_default_includes_all_categories():\n    result = build_rules_context()\n    assert result.startswith(\"## Domain Rules\")\n    for section in (\"SECURITY\", \"AIRFLOW\", \"PYSPARK\", \"PYTHON\"):\n        assert f\"### {section} Rules\" in result\n\ndef test_build_rules_context_single_category():\n    result = build_rules_context(categories=[\"security\"])\n    assert \"### SECURITY Rules\" in result\n    assert \"SEC-001\" in result\n    assert \"### AIRFLOW Rules\" not in result",
-          "recommendation": "Add tests for the default path (all categories) and for an explicit subset; confirm section headers and rule IDs appear in output."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "MEDIUM",
-          "line": 96,
-          "file": "domain_rules.py",
-          "description": "The `if not rules: continue` branch inside build_rules_context() is never exercised. Passing an unknown category name silently skips it; this silent-skip behaviour is untested.",
-          "code_snippet": "def test_build_rules_context_unknown_category_is_skipped():\n    result = build_rules_context(categories=[\"nonexistent_category\"])\n    # Only the header line should be present; no rule sections\n    lines = [l for l in result.splitlines() if l.strip()]\n    assert lines == [\"## Domain Rules\"]",
-          "recommendation": "Pass a category key that is absent from ALL_RULES and assert no rule block is emitted. This exercises the guard on line 96."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "MEDIUM",
-          "line": 89,
-          "file": "domain_rules.py",
-          "description": "build_rules_context(categories=[]) (empty list) is untested. The for-loop body never executes; the function should still return a valid (header-only) string without raising.",
-          "code_snippet": "def test_build_rules_context_empty_categories_list():\n    result = build_rules_context(categories=[])\n    assert \"## Domain Rules\" in result\n    assert \"SEC-\" not in result\n    assert \"AF-\" not in result",
-          "recommendation": "Verify the function handles an empty list gracefully and returns a non-empty, well-formed string."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "HIGH",
-          "line": null,
-          "file": "domain_rules.py",
-          "description": "get_forbidden_patterns() has zero test coverage. Neither the count of returned dicts, their required keys, nor the validity of severity values is verified.",
-          "code_snippet": "import pytest\nfrom domain_rules import get_forbidden_patterns, ALL_RULES\n\ndef test_get_forbidden_patterns_count_matches_all_rules():\n    patterns = get_forbidden_patterns()\n    expected = sum(len(v) for v in ALL_RULES.values())\n    assert len(patterns) == expected\n\ndef test_get_forbidden_patterns_dict_keys():\n    required = {\"id\", \"pattern\", \"severity\", \"description\", \"fix_hint\"}\n    for p in get_forbidden_patterns():\n        assert required.issubset(p.keys()), f\"Missing keys in {p}\"\n\ndef test_get_forbidden_patterns_severity_values():\n    valid = {\"CRITICAL\", \"HIGH\", \"MEDIUM\", \"LOW\"}\n    for p in get_forbidden_patterns():\n        assert p[\"severity\"] in valid, f\"Unexpected severity: {p['severity']}\"",
-          "recommendation": "Cover count invariant, required dict keys, and valid severity enum. If ALL_RULES grows, these tests will catch omissions automatically."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "MEDIUM",
-          "line": 12,
-          "file": "domain_rules.py",
-          "description": "The Rule dataclass is never instantiated in tests. The optional fix_hint default (empty string) and field ordering are untested.",
-          "code_snippet": "from domain_rules import Rule\n\ndef test_rule_fix_hint_defaults_to_empty_string():\n    rule = Rule(id=\"T-001\", description=\"test rule\", pattern=r\"\\btest\\b\",\n                severity=\"LOW\", category=\"python\")\n    assert rule.fix_hint == \"\"\n\ndef test_rule_stores_all_fields():\n    rule = Rule(id=\"T-002\", description=\"desc\", pattern=r\"x+\",\n                severity=\"CRITICAL\", category=\"security\", fix_hint=\"Do X instead.\")\n    assert rule.id == \"T-002\"\n    assert rule.severity == \"CRITICAL\"\n    assert rule.fix_hint == \"Do X instead.\"",
-          "recommendation": "Unit-test the dataclass directly; this will catch any accidental reordering of fields that breaks callers relying on positional arguments."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "MEDIUM",
-          "line": null,
-          "file": "domain_rules.py",
-          "description": "build_rules_context() output format for each rule line (severity badge, id, description, pattern block, fix hint) is untested. A formatting regression (e.g. missing newline) would silently corrupt all injected prompts.",
-          "code_snippet": "def test_build_rules_context_rule_line_format():\n    result = build_rules_context(categories=[\"security\"])\n    # SEC-001 must include severity badge, id, pattern, and fix hint\n    assert \"[CRITICAL] SEC-001\" in result\n    assert \"Pattern: `\" in result\n    assert \"Fix: \" in result",
-          "recommendation": "Assert the per-rule formatting contract so prompt-injection consumers are not silently broken by formatting changes."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "LOW",
-          "line": null,
-          "file": "conftest.py",
-          "description": "No conftest.py fixtures exist for shared Rule instances or a trimmed ALL_RULES dict. Every future test will re-construct Rule objects inline, leading to duplication.",
-          "code_snippet": "# conftest.py\nimport pytest\nfrom domain_rules import Rule, ALL_RULES\n\n@pytest.fixture()\ndef sample_rule():\n    return Rule(\n        id=\"TEST-001\",\n        description=\"Sample rule\",\n        pattern=r\"\\bsample\\b\",\n        severity=\"LOW\",\n        category=\"python\",\n        fix_hint=\"Replace with better code.\",\n    )\n\n@pytest.fixture()\ndef single_category_rules_dict(monkeypatch):\n    \"\"\"Patch ALL_RULES with a single, minimal category for isolation.\"\"\"\n    import domain_rules\n    minimal = {\"python\": ALL_RULES[\"python\"]}\n    monkeypatch.setattr(domain_rules, \"ALL_RULES\", minimal)\n    return minimal",
-          "recommendation": "Add conftest.py with at least a sample_rule fixture and a monkeypatched ALL_RULES fixture to keep test setup DRY and fast."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "LOW",
-          "line": null,
-          "file": "domain_rules.py",
-          "description": "No integration test verifies that build_rules_context() output is consumable end-to-end (e.g., that the returned string can be embedded in a prompt template without encoding errors or truncation of long patterns).",
-          "code_snippet": "def test_build_rules_context_output_is_plain_str_no_encoding_errors():\n    result = build_rules_context()\n    # Must be a plain str, no bytes or None\n    assert isinstance(result, str)\n    # Regex patterns must survive a round-trip through the string\n    assert r\"(?i)(password|passwd\" in result  # SEC-001 pattern fragment\n    # Ensure no NUL bytes that would corrupt prompt injection\n    assert \"\\x00\" not in result",
-          "recommendation": "Add a lightweight integration test that embeds the output into a mock prompt template and asserts no corruption — separates unit tests (structure) from integration tests (runtime usage)."
-        },
-        {
-          "type": "finding",
-          "agent": "test_coverage",
-          "severity": "LOW",
-          "line": null,
-          "file": "domain_rules.py",
-          "description": "ALL_RULES dictionary completeness is unverified. A developer adding a new rule list (e.g. DATABRICKS_RULES) could forget to register it in ALL_RULES; no test would catch the omission.",
-          "code_snippet": "from domain_rules import ALL_RULES, SECURITY_RULES, AIRFLOW_RULES, PYSPARK_RULES, PYTHON_RULES\n\ndef test_all_rules_registers_every_rule_list():\n    expected = {\n        \"security\": SECURITY_RULES,\n        \"airflow\": AIRFLOW_RULES,\n        \"pyspark\": PYSPARK_RULES,\n        \"python\": PYTHON_RULES,\n    }\n    assert ALL_RULES == expected",
-          "recommendation": "Pin the expected contents of ALL_RULES so unregistered rule lists are caught at test time, not at runtime."
-        }
-      ],
-      "error": null
-    },
-    "consistency_checker": {
-      "display_name": "Cross-file Consistency Checker",
-      "total_findings": 5,
-      "highest_severity": "MEDIUM",
-      "verdict": "APPROVE",
-      "findings": [
-        {
-          "type": "finding",
-          "agent": "consistency_checker",
-          "severity": "MEDIUM",
-          "line": null,
-          "file": "rules.py",
-          "description": "Module-level `__all__` is absent. The module exposes several public symbols (`Rule`, `SECURITY_RULES`, `AIRFLOW_RULES`, `PYSPARK_RULES`, `PYTHON_RULES`, `ALL_RULES`, `build_rules_context`, `get_forbidden_patterns`) but defines no explicit public API, so `from rules import *` would leak every name.",
-          "recommendation": "Add `__all__ = [\"Rule\", \"SECURITY_RULES\", \"AIRFLOW_RULES\", \"PYSPARK_RULES\", \"PYTHON_RULES\", \"ALL_RULES\", \"build_rules_context\", \"get_forbidden_patterns\"]` near the top of the file, after imports."
-        },
-        {
-          "type": "finding",
-          "agent": "consistency_checker",
-          "severity": "MEDIUM",
-          "line": 6,
-          "file": "rules.py",
-          "description": "Inconsistent/incomplete import: `Optional` is required by `build_rules_context` (its parameter `categories` defaults to `None`) but is never imported. Meanwhile `field` is imported from `dataclasses` on this same line yet is never referenced anywhere in the file.",
-          "recommendation": "Replace `from dataclasses import dataclass, field` with `from dataclasses import dataclass`, and add `Optional` to the `typing` import: `from typing import Dict, List, Optional`. Then annotate the parameter as `Optional[List[str]] = None`."
-        },
-        {
-          "type": "finding",
-          "agent": "consistency_checker",
-          "severity": "MEDIUM",
-          "line": null,
-          "file": "rules.py",
-          "description": "Severity levels (\"CRITICAL\", \"HIGH\", \"MEDIUM\", \"LOW\") are defined as repeated bare string literals scattered across every `Rule(...)` instantiation rather than sourced from a single authoritative definition. This is a magic-string constant duplicated in ~16 places, making typos undetectable at import time.",
-          "recommendation": "Introduce a `Severity` enum: `class Severity(str, enum.Enum): CRITICAL = \"CRITICAL\"; HIGH = \"HIGH\"; MEDIUM = \"MEDIUM\"; LOW = \"LOW\"`. Change the `Rule.severity` field type to `Severity` and replace all string literals (e.g., `severity=\"CRITICAL\"`) with `severity=Severity.CRITICAL`."
-        },
-        {
-          "type": "finding",
-          "agent": "consistency_checker",
-          "severity": "LOW",
-          "line": 10,
-          "file": "rules.py",
-          "description": "The `Rule` dataclass has no class-level docstring, while the module has a module docstring and both public functions have docstrings. This is an inconsistent docstring coverage pattern.",
-          "recommendation": "Add a concise class docstring, e.g.: `\"\"\"Represents a single domain-specific lint rule with its regex pattern, severity, and remediation hint.\"\"\"`"
-        },
-        {
-          "type": "finding",
-          "agent": "consistency_checker",
-          "severity": "LOW",
-          "line": null,
-          "file": "rules.py",
-          "description": "Inconsistent docstring style: `build_rules_context` and `get_forbidden_patterns` use bare single-line docstrings with no `Args:` or `Returns:` sections, while the module docstring is a proper multi-line block. No single docstring convention (Google, NumPy, or reST) is applied consistently across all documented callables.",
-          "recommendation": "Adopt one style (Google is common in Airflow/data projects) and apply it uniformly. For example, expand `build_rules_context` to: `\"\"\"Return a formatted string of rules to inject into agent prompts.\\n\\nArgs:\\n    categories: Rule categories to include; defaults to all.\\n\\nReturns:\\n    Multi-line string of formatted rules.\\n\"\"\"`"
-        }
-      ],
-      "error": null
-    },
-    "domain_linter": {
-      "display_name": "Airflow/PySpark Domain Linter",
       "total_findings": 0,
       "highest_severity": "NONE",
       "verdict": "APPROVE",
       "findings": [],
-      "error": "Timeout after 120s"
+      "error": null
+    },
+    "bug_detector": {
+      "display_name": "Bug & Logic Detector",
+      "total_findings": 0,
+      "highest_severity": "NONE",
+      "verdict": "APPROVE",
+      "findings": [],
+      "error": null
+    },
+    "test_coverage": {
+      "display_name": "Test Coverage + TDD Suggester",
+      "total_findings": 0,
+      "highest_severity": "NONE",
+      "verdict": "APPROVE",
+      "findings": [],
+      "error": null
+    },
+    "consistency_checker": {
+      "display_name": "Cross-file Consistency Checker",
+      "total_findings": 0,
+      "highest_severity": "NONE",
+      "verdict": "APPROVE",
+      "findings": [],
+      "error": null
+    },
+    "domain_linter": {
+      "display_name": "Airflow Domain Linter",
+      "total_findings": 0,
+      "highest_severity": "NONE",
+      "verdict": "APPROVE",
+      "findings": [],
+      "error": null
     }
   }
 }
